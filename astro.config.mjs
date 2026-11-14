@@ -1,14 +1,7 @@
-import node from "@astrojs/node";
 import { defineConfig } from "astro/config";
-// https://astro.build/config
-export default defineConfig({
-	output: "server",
-	adapter: node({
-		mode: "standalone",
-	}),
 
-	server: {
-		port: 80,
-		host: true,
-	},
+export default defineConfig({
+  output: "static", // Required for GitHub Pages
+  site: "https://your-username.github.io",
+  base: "/duck-duck-no-better/",
 });
