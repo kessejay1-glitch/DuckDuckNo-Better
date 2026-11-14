@@ -5,88 +5,433 @@ import ResultComponent from "../components/Result.astro";
 import SearchBox from "../components/SearchBox.astro";
 import { fetchResults } from "../server/search";
 
-const query = Astro.url.searchParams.get("q");
-let page = Number(Astro.url.searchParams.get("p"));
+const rawQuery = Astro.url.searchParams.get("q");
+const query = rawQuery?.trim() ?? "";
 
-if (!page || page >= 10 || page < 0) {
-	page = 0;
-}
-
-if (query == null) {
+if (!query) {
 	return Astro.redirect("/", 302);
 }
-const results = await fetchResults(query, page);
-if (results.error?.code) {
-	console.error(results.error);
+
+const rawPage = Number(Astro.url.searchParams.get("p"));
+const page = Number.isInteger(rawPage) && rawPage >= 0 && rawPage < 10 ? rawPage : 0;
+
+const validTabs = ["all", "images", "videos", "news", "code"] as const;
+type SearchTab = (typeof validTabs)[number];
+const rawTab = Astro.url.searchParams.get("t")?.toLowerCase() as SearchTab;
+const activeTab: SearchTab = validTabs.includes(rawTab) ? rawTab : "all";
+
+const startTime = performance.now();
+let results;
+
+try {
+	results = await fetchResults(query, page, activeTab);
+} catch (err) {
+	console.error("Search exception:", err);
 	return Astro.redirect("/error", 302);
 }
+
+const fetchDurationMs = Math.round(performance.now() - startTime);
+
+if (results?.error?.code) {
+	console.error("Search API error:", results.error);
+	return Astro.redirect("/error", 302);
+}
+
+const items = results?.items ?? [];
+const totalResults = results?.searchInformation?.formattedTotalResults ?? null;
+const correctedQuery = results?.spelling?.correctedQuery ?? null;
+
+const maxPages = 10;
+const pageNumbers = Array.from({ length: maxPages }, (_, i) => i);
+
+const buildSearchUrl = (targetPage: number, targetTab: SearchTab = activeTab) => {
+	const params = new URLSearchParams({
+		q: query,
+		p: String(targetPage),
+	});
+	if (targetTab !== "all") {
+		params.set("t", targetTab);
+	}
+	return `/search?${params.toString()}`;
+};
+
+const hasPrev = page > 0;
+const hasNext = page < maxPages - 1 && items.length > 0;
 ---
 
-<div class="navbar">
-    <a class="logo-element" href="/">
-        <Logo />
-    </a>
-    <div class="search-wrapper">
-        <SearchBox />
-    </div>
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+		<meta name="color-scheme" content="dark" />
+		<title>{query} — Search</title>
+	</head>
+	<body>
+		<div class="app-shell">
+			<!-- Sticky Header -->
+			<header class="navbar">
+				<div class="navbar-top">
+					<a class="logo-link" href="/" aria-label="Home">
+						<Logo />
+					</a>
+					<div class="search-container">
+						<SearchBox value={query} />
+					</div>
+				</div>
 
-    <a class="page-button"> &lt; </a>
-    <a class="page-button"> &gt; </a>
-</div>
-<div class="results">
-    {
-        results.items.map((result) => (
-            <ResultComponent
-                title={result.title}
-                description={result.snippet}
-                url={result.link}
-            />
-        ))
-    }
-</div>
-<Footer github="search.astro" />
+				<!-- Horizontal Swipeable Tabs -->
+				<nav class="tabs-bar" aria-label="Search categories">
+					{
+						validTabs.map((tab) => {
+							const isActive = activeTab === tab;
+							return (
+								<a
+									href={buildSearchUrl(0, tab)}
+									class:list={["tab-item", { active: isActive }]}
+									aria-current={isActive ? "page" : undefined}
+								>
+									{tab.charAt(0).toUpperCase() + tab.slice(1)}
+								</a>
+							);
+						})
+					}
+				</nav>
+			</header>
+
+			<!-- Main Content -->
+			<main class="main-content">
+				<div class="stats-bar">
+					{
+						totalResults ? (
+							<span>
+								About <strong>{totalResults}</strong> results ({fetchDurationMs} ms)
+							</span>
+						) : (
+							<span>
+								Page {page + 1} ({fetchDurationMs} ms)
+							</span>
+						)
+					}
+				</div>
+
+				{
+					correctedQuery && (
+						<div class="spellcheck-banner">
+							Did you mean:{" "}
+							<a href={`/search?q=${encodeURIComponent(correctedQuery)}`}>
+								{correctedQuery}
+							</a>
+							?
+						</div>
+					)
+				}
+
+				{
+					items.length > 0 ? (
+						<section class="results-list" aria-label="Search results">
+							{items.map((result) => (
+								<article class="result-card-wrapper">
+									<ResultComponent
+										title={result.title}
+										description={result.snippet}
+										url={result.link}
+									/>
+								</article>
+							))}
+						</section>
+					) : (
+						<section class="empty-state">
+							<h2>No matches found for "{query}"</h2>
+							<p>Check your spelling or try broader keywords.</p>
+						</section>
+					)
+				}
+
+				{/* Mobile-Friendly Pagination */}
+				{
+					items.length > 0 && (
+						<nav class="pagination" aria-label="Pagination">
+							<a
+								href={hasPrev ? buildSearchUrl(page - 1) : undefined}
+								class:list={["nav-btn", { disabled: !hasPrev }]}
+								aria-disabled={!hasPrev}
+							>
+								← Prev
+							</a>
+
+							<div class="page-numbers">
+								{pageNumbers.map((num) => {
+									const isCurrent = num === page;
+									return (
+										<a
+											href={buildSearchUrl(num)}
+											class:list={["page-num", { active: isCurrent }]}
+											aria-current={isCurrent ? "page" : undefined}
+										>
+											{num + 1}
+										</a>
+									);
+								})}
+							</div>
+
+							<a
+								href={hasNext ? buildSearchUrl(page + 1) : undefined}
+								class:list={["nav-btn", { disabled: !hasNext }]}
+								aria-disabled={!hasNext}
+							>
+								Next →
+							</a>
+						</nav>
+					)
+				}
+			</main>
+
+			<Footer github="search.astro" />
+		</div>
+	</body>
+</html>
 
 <style>
-    body {
-        background-color: #14141b;
-        overflow-x: hidden;
-    }
+	:root {
+		--bg-primary: #14141b;
+		--bg-surface: #1c1c27;
+		--bg-surface-hover: #252533;
+		--border-subtle: #2d2d3f;
+		--text-primary: #f3f4f6;
+		--text-secondary: #9ca3af;
+		--text-muted: #6b7280;
+		--accent: #6366f1;
+		--accent-glow: rgba(99, 102, 241, 0.2);
+	}
 
-    .logo-element {
-        width: 6vh;
-        margin-left: 1vw;
-    }
+	:global(*) {
+		box-sizing: border-box;
+		-webkit-tap-highlight-color: transparent;
+	}
 
-    .navbar {
-        pointer-events: all;
-        flex-wrap: wrap;
-        position: absolute;
-        top: 0;
-        margin-left: -1vw;
-        width: 102vw;
-        display: flex;
-        justify-content: left;
-        background-color: #141414;
-        align-items: center;
-    }
+	body {
+		margin: 0;
+		background-color: var(--bg-primary);
+		color: var(--text-primary);
+		font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+		line-height: 1.5;
+		overflow-x: hidden;
+	}
 
-    .page-button {
-        color: #fff;
-        font-size: 3cqh;
-        margin: 2vh;
-    }
+	.app-shell {
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
 
-    .search-wrapper {
-        width: 25vw;
-        margin: 1vw;
-    }
+	/* Sticky Header */
+	.navbar {
+		position: sticky;
+		top: 0;
+		z-index: 100;
+		width: 100%;
+		background-color: rgba(20, 20, 27, 0.92);
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border-bottom: 1px solid var(--border-subtle);
+	}
 
-    .results {
-        position: absolute;
-        top: 10vh;
-        left: 5%;
-        width: 75vw;
-        display: grid;
-        grid-gap: 2vh;
-    }
+	.navbar-top {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.75rem 1rem;
+		width: 100%;
+	}
+
+	.logo-link {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.25rem;
+		height: 2.25rem;
+		flex-shrink: 0;
+	}
+
+	.search-container {
+		flex: 1;
+		min-width: 0;
+	}
+
+	/* Swipeable Tabs Bar */
+	.tabs-bar {
+		display: flex;
+		gap: 1.25rem;
+		padding: 0 1rem 0.6rem;
+		overflow-x: auto;
+		scrollbar-width: none;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.tabs-bar::-webkit-scrollbar {
+		display: none;
+	}
+
+	.tab-item {
+		position: relative;
+		padding: 0.25rem 0;
+		color: var(--text-secondary);
+		text-decoration: none;
+		font-size: 0.875rem;
+		font-weight: 500;
+		white-space: nowrap;
+		transition: color 0.15s ease;
+	}
+
+	.tab-item.active {
+		color: var(--accent);
+		font-weight: 600;
+	}
+
+	.tab-item.active::after {
+		content: "";
+		position: absolute;
+		bottom: -0.6rem;
+		left: 0;
+		right: 0;
+		height: 2px;
+		background-color: var(--accent);
+		border-radius: 2px;
+	}
+
+	/* Main Content Layout */
+	.main-content {
+		flex: 1;
+		width: 100%;
+		max-width: 760px;
+		margin: 0 auto;
+		padding: 1rem 1rem 3rem;
+	}
+
+	.stats-bar {
+		font-size: 0.8rem;
+		color: var(--text-muted);
+		margin-bottom: 1rem;
+	}
+
+	.stats-bar strong {
+		color: var(--text-secondary);
+	}
+
+	.spellcheck-banner {
+		margin-bottom: 1rem;
+		padding: 0.65rem 0.85rem;
+		background-color: var(--bg-surface);
+		border-left: 3px solid var(--accent);
+		border-radius: 6px;
+		font-size: 0.9rem;
+		color: var(--text-secondary);
+	}
+
+	.spellcheck-banner a {
+		color: var(--accent);
+		font-weight: 600;
+		text-decoration: none;
+	}
+
+	/* Results Feed */
+	.results-list {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.result-card-wrapper {
+		padding: 0.9rem 1rem;
+		background-color: var(--bg-surface);
+		border: 1px solid var(--border-subtle);
+		border-radius: 10px;
+	}
+
+	/* Empty State */
+	.empty-state {
+		margin-top: 2rem;
+		padding: 2rem 1rem;
+		text-align: center;
+		background-color: var(--bg-surface);
+		border: 1px solid var(--border-subtle);
+		border-radius: 10px;
+		color: var(--text-secondary);
+	}
+
+	.empty-state h2 {
+		font-size: 1.15rem;
+		color: var(--text-primary);
+		margin: 0 0 0.4rem;
+	}
+
+	/* Pagination */
+	.pagination {
+		margin-top: 2rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--border-subtle);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
+	.page-numbers {
+		display: none; /* Keep pagination clean & compact on mobile */
+	}
+
+	.nav-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 2.5rem;
+		padding: 0 1rem;
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: var(--text-primary);
+		background-color: var(--bg-surface);
+		border: 1px solid var(--border-subtle);
+		border-radius: 8px;
+		text-decoration: none;
+	}
+
+	.nav-btn.disabled {
+		opacity: 0.3;
+		pointer-events: none;
+	}
+
+	/* Tablet & Desktop Enhancements */
+	@media (min-width: 640px) {
+		.main-content {
+			padding: 1.5rem 1.5rem 4rem;
+		}
+
+		.page-numbers {
+			display: flex;
+			gap: 0.25rem;
+		}
+
+		.page-num {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 2.25rem;
+			height: 2.25rem;
+			font-size: 0.875rem;
+			font-weight: 500;
+			color: var(--text-secondary);
+			background-color: var(--bg-surface);
+			border: 1px solid var(--border-subtle);
+			border-radius: 6px;
+			text-decoration: none;
+		}
+
+		.page-num.active {
+			color: #fff;
+			background-color: var(--accent);
+			border-color: var(--accent);
+			font-weight: 700;
+		}
+	}
 </style>
