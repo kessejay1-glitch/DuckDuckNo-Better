@@ -3,5 +3,5 @@ import { defineConfig } from "astro/config";
 export default defineConfig({
   output: "static",
   site: "https://kessejay1-glitch.github.io",
-  base: "/DuckDuckno-better/",
+  base: "/DuckDuckNo-Better/",
 });
